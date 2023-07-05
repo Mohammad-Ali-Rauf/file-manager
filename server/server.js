@@ -3,8 +3,10 @@ import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import User from './models/User.js';
+import File from './models/File.js';
 import multer from 'multer';
 import Grid from 'gridfs-stream';
+import { GridFsStorage } from 'multer-gridfs-storage';
 import { config } from 'dotenv';
 config();
 
@@ -20,6 +22,22 @@ try {
   console.error('Error connecting to MongoDB: ', err);
 }
 
+const validateToken = (req, res, next) => {
+  const token = req.headers['token'];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
 const connection = mongoose.connection;
 let gfs; // GridFS stream instance
 
@@ -30,20 +48,37 @@ connection.once('open', () => {
 });
 
 // Set up GridFS storage
-const storage = multer({
-  storage: multer.GridFsStorage({
-    gfs,
-    file: (req, file) => {
-      return { filename: file.originalname };
-    },
-  }),
+const storage = new GridFsStorage({
+  url: process.env.DATABASE_URI, // Database connection URL
+  file: (req, file) => {
+    return { filename: file.originalname };
+  },
 });
 
+const upload = multer({ storage });
+
 // File upload route handler
-app.post('/upload', storage.single('file'), (req, res) => {
-  // Access the uploaded file information via req.file
-  // Perform any additional processing or database operations here
-  // Return appropriate response to the client
+app.post('/upload', validateToken, upload.single('file'), async (req, res) => {
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  const { filename, originalname, contentType, size } = req.file;
+  const owner = req.user.userId;
+
+  const newFile = new File({
+    filename,
+    originalname,
+    contentType,
+    size,
+    owner
+  });
+
+  await newFile.save();
+  await User.findByIdAndUpdate(req.user.userId, { $push: { files: filename } });
+
+  return res.status(201).json({ msg: 'File saved in database', newFile });
 });
 
 // Get a specific file by its ID
@@ -120,7 +155,7 @@ app.post('/login', async (req, res) => {
 
     // Check if the user exists
     if (!user) {
-      return res.status(400).json({ msg: 'User doesn\'t exists!!' });
+      return res.status(400).json({ msg: "User doesn't exists!!" });
     }
 
     // Compare the provided password with the hashed password stored in the database

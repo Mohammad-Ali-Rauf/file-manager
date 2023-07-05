@@ -18,6 +18,11 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  files: [
+    {
+      type: String,
+    }
+  ]
 });
 
 const User = mongoose.model('user', userSchema);
